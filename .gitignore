@@ -1,0 +1,5 @@
+build/
+tools/
+.m2/
+*.jar
+*.log

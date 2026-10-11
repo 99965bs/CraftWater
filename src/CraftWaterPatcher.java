@@ -1073,10 +1073,11 @@ public class CraftWaterPatcher extends JFrame {
         void installFile(Path mvn, Path m2, Path jar, String g, String a, String v,
                          Consumer<String> log) throws Exception {
             log.accept("install " + g + ":" + a + ":" + v);
-            List<String> cmd = new ArrayList<>(mvnArgs());
+            List<String> cmd = new ArrayList<>();
             cmd.add(mvn.toString());
             cmd.add("-q");
             cmd.add("-Dmaven.repo.local=" + m2);
+            cmd.addAll(mvnArgs());
             cmd.add("install:install-file");
             cmd.add("-Dfile=" + jar);
             cmd.add("-DgroupId=" + g);
@@ -1087,10 +1088,11 @@ public class CraftWaterPatcher extends JFrame {
         }
 
         void mvnPackage(Path mvn, Path m2, Path dir, Consumer<String> log) throws Exception {
-            List<String> cmd = new ArrayList<>(mvnArgs());
+            List<String> cmd = new ArrayList<>();
             cmd.add(mvn.toString());
             cmd.add("-B");
             cmd.add("-Dmaven.repo.local=" + m2);
+            cmd.addAll(mvnArgs());
             cmd.add("-DskipTests");
             cmd.add("clean");
             cmd.add("package");

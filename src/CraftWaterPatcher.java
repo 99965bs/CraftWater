@@ -2,6 +2,9 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.io.*;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -560,8 +563,15 @@ public class CraftWaterPatcher extends JFrame {
             }
         }
 
+        static {
+            if (System.getProperty("java.net.useSystemProxies") == null)
+                System.setProperty("java.net.useSystemProxies", "true");
+        }
+
         static final HttpClient HTTP = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.ALWAYS).build();
+                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .proxy(ProxySelector.getDefault())
+                .connectTimeout(Duration.ofSeconds(30)).build();
 
         interface Prog { void at(int overall, int module, String stage); }
 
@@ -974,7 +984,7 @@ public class CraftWaterPatcher extends JFrame {
         void download(String url, Path out, Consumer<String> log) throws Exception {
             Files.createDirectories(out.getParent());
             HttpResponse<InputStream> resp = HTTP.send(
-                    HttpRequest.newBuilder(URI.create(url)).GET().build(),
+                    HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build(),
                     HttpResponse.BodyHandlers.ofInputStream());
             if (resp.statusCode() / 100 != 2)
                 throw new IOException("HTTP " + resp.statusCode() + " for " + url);
@@ -1024,23 +1034,67 @@ public class CraftWaterPatcher extends JFrame {
             throw new IllegalStateException("Maven extracted but mvn not found under " + home);
         }
 
+        List<String> mvnArgs() {
+            List<String> a = new ArrayList<>();
+            // Maven Resolver: fail fast instead of hanging on an unresponsive repo.
+            a.add("-Daether.connector.connectTimeout=10000");
+            a.add("-Daether.connector.requestTimeout=30000");
+            a.add("-Daether.connector.leaseTimeout=15000");
+            a.add("-Dmaven.wagon.http.connectionTimeout=10000");
+            a.add("-Dmaven.wagon.http.readTimeout=30000");
+            a.add("-Dmaven.wagon.rto=30000");
+            // Let Maven's JVM honor the OS proxy settings.
+            a.add("-Djava.net.useSystemProxies=true");
+            for (String k : new String[]{"http.proxyHost", "http.proxyPort",
+                    "https.proxyHost", "https.proxyPort", "http.nonProxyHosts"}) {
+                String v = System.getProperty(k);
+                if (v != null && !v.isEmpty()) a.add("-D" + k + "=" + v);
+            }
+            try {
+                ProxySelector ps = ProxySelector.getDefault();
+                if (ps != null) {
+                    for (Proxy p : ps.select(URI.create("https://repo.maven.apache.org/maven2/"))) {
+                        if (p.type() == Proxy.Type.HTTP && p.address() instanceof InetSocketAddress isa) {
+                            String host = isa.getHostString();
+                            if (host != null && !host.isEmpty() && isa.getPort() > 0) {
+                                a.add("-Dhttp.proxyHost=" + host);
+                                a.add("-Dhttp.proxyPort=" + isa.getPort());
+                                a.add("-Dhttps.proxyHost=" + host);
+                                a.add("-Dhttps.proxyPort=" + isa.getPort());
+                            }
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignore) {}
+            return a;
+        }
+
         void installFile(Path mvn, Path m2, Path jar, String g, String a, String v,
                          Consumer<String> log) throws Exception {
             log.accept("install " + g + ":" + a + ":" + v);
-            run(log, root,
-                    mvn.toString(), "-q",
-                    "-Dmaven.repo.local=" + m2,
-                    "install:install-file",
-                    "-Dfile=" + jar,
-                    "-DgroupId=" + g, "-DartifactId=" + a,
-                    "-Dversion=" + v, "-Dpackaging=jar");
+            List<String> cmd = new ArrayList<>(mvnArgs());
+            cmd.add(mvn.toString());
+            cmd.add("-q");
+            cmd.add("-Dmaven.repo.local=" + m2);
+            cmd.add("install:install-file");
+            cmd.add("-Dfile=" + jar);
+            cmd.add("-DgroupId=" + g);
+            cmd.add("-DartifactId=" + a);
+            cmd.add("-Dversion=" + v);
+            cmd.add("-Dpackaging=jar");
+            run(log, root, cmd.toArray(new String[0]));
         }
 
         void mvnPackage(Path mvn, Path m2, Path dir, Consumer<String> log) throws Exception {
-            run(log, dir,
-                    mvn.toString(), "-B",
-                    "-Dmaven.repo.local=" + m2,
-                    "-DskipTests", "clean", "package");
+            List<String> cmd = new ArrayList<>(mvnArgs());
+            cmd.add(mvn.toString());
+            cmd.add("-B");
+            cmd.add("-Dmaven.repo.local=" + m2);
+            cmd.add("-DskipTests");
+            cmd.add("clean");
+            cmd.add("package");
+            run(log, dir, cmd.toArray(new String[0]));
         }
 
         void run(Consumer<String> log, Path cwd, String... cmd) throws Exception {
